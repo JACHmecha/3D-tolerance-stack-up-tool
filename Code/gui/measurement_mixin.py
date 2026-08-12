@@ -294,6 +294,7 @@ class MeasurementMixin:
 
         return {
             "center": center_3d, "radius": radius, "normal": normal, "rms_residual": rms_residual,
+            "u_axis": u_axis, "v_axis": v_axis,
         }
 
     def _measure_compute(self):

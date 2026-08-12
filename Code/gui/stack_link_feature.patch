@@ -1,0 +1,137 @@
+diff --git a/Code/gui/app.py b/Code/gui/app.py
+index ecc8e18..7c22cff 100644
+--- a/Code/gui/app.py
++++ b/Code/gui/app.py
+@@ -83,13 +83,14 @@ from gui.analysis_mixin import AnalysisMixin
+ from gui.measurement_mixin import MeasurementMixin
+ from gui.eclipse_mixin import EclipseMixin
+ from gui.gdt_mixin import GdtMixin, PATTERN_COLUMNS
++from gui.stack_link_mixin import StackLinkMixin
+ 
+ COLUMNS = ["Name", "Nominal", "Tol +", "Tol -", "+/-", "Cpk"]
+ 
+ 
+ class TolstackWindow(
+     QMainWindow, StepViewerMixin, DimensionBankMixin, AnalysisMixin,
+-    MeasurementMixin, EclipseMixin, GdtMixin,
++    MeasurementMixin, EclipseMixin, GdtMixin, StackLinkMixin,
+ ):
+     def __init__(self):
+         super().__init__()
+@@ -115,6 +116,7 @@ class TolstackWindow(
+         self._pick_markers = []
+         self._measure_init_state()
+         self._gdt_init_state()
++        self._stack_link_init_state()
+ 
+         central = QWidget()
+         self.setCentralWidget(central)
+@@ -165,9 +167,11 @@ class TolstackWindow(
+         stack_tab = QWidget()
+         stack_layout = QVBoxLayout(stack_tab)
+ 
+-        self.table = QTableWidget(0, len(COLUMNS))
+-        self.table.setHorizontalHeaderLabels(COLUMNS)
+-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
++        self.table = QTableWidget(0, len(COLUMNS) + 1)  # +1 for the 3D-link Value column
++        self.table.setHorizontalHeaderLabels(COLUMNS + ["3D Value"])
++        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
++        self.table.horizontalHeader().setMinimumSectionSize(50)
++        self.STACK_LINK_VALUE_COLUMN = len(COLUMNS)
+         stack_layout.addWidget(self.table)
+ 
+         legend = QHBoxLayout()
+@@ -190,6 +194,55 @@ class TolstackWindow(
+         row_btns.addWidget(remove_btn)
+         stack_layout.addLayout(row_btns)
+ 
++        link_intro = QLabel(
++            "Link a selected row to a STEP feature to explore its tolerance "
++            "range live in the 3D view - select a row, click Link, then click "
++            "the feature in the viewport."
++        )
++        link_intro.setWordWrap(True)
++        link_intro.setStyleSheet("color: #555555; font-size: 11px;")
++        stack_layout.addWidget(link_intro)
++
++        link_row = QHBoxLayout()
++        link_btn = QPushButton("Link selected row to feature")
++        link_btn.clicked.connect(self.link_selected_row_to_feature)
++        unlink_btn = QPushButton("Unlink")
++        unlink_btn.clicked.connect(self.unlink_selected_row)
++        link_row.addWidget(link_btn)
++        link_row.addWidget(unlink_btn)
++        stack_layout.addLayout(link_row)
++
++        snap_row1 = QHBoxLayout()
++        snap_worst_upper_btn = QPushButton("Snap: Worst \u2191")
++        snap_worst_upper_btn.clicked.connect(self.snap_to_worst_case_upper)
++        snap_worst_lower_btn = QPushButton("Snap: Worst \u2193")
++        snap_worst_lower_btn.clicked.connect(self.snap_to_worst_case_lower)
++        snap_row1.addWidget(snap_worst_upper_btn)
++        snap_row1.addWidget(snap_worst_lower_btn)
++        stack_layout.addLayout(snap_row1)
++
++        snap_row2 = QHBoxLayout()
++        snap_mc_max_btn = QPushButton("Snap: MC Max")
++        snap_mc_max_btn.clicked.connect(self.snap_to_monte_carlo_max)
++        snap_mc_min_btn = QPushButton("Snap: MC Min")
++        snap_mc_min_btn.clicked.connect(self.snap_to_monte_carlo_min)
++        snap_row2.addWidget(snap_mc_max_btn)
++        snap_row2.addWidget(snap_mc_min_btn)
++        stack_layout.addLayout(snap_row2)
++
++        snap_row3 = QHBoxLayout()
++        reset_links_btn = QPushButton("Reset to nominal")
++        reset_links_btn.clicked.connect(self.reset_stack_links_to_nominal)
++        snap_row3.addWidget(reset_links_btn)
++        snap_row3.addWidget(QLabel("MC samples:"))
++        self.stack_link_snap_iterations_input = QSpinBox()
++        self.stack_link_snap_iterations_input.setRange(100, 1000000)
++        self.stack_link_snap_iterations_input.setSingleStep(1000)
++        self.stack_link_snap_iterations_input.setValue(20000)
++        self.stack_link_snap_iterations_input.setMaximumWidth(90)
++        snap_row3.addWidget(self.stack_link_snap_iterations_input)
++        stack_layout.addLayout(snap_row3)
++
+         sidebar.addTab(stack_tab, "Stack Table")
+ 
+         # --- Tab 3: Results ---
+diff --git a/Code/gui/measurement_mixin.py b/Code/gui/measurement_mixin.py
+index 9fab7ca..2619d99 100644
+--- a/Code/gui/measurement_mixin.py
++++ b/Code/gui/measurement_mixin.py
+@@ -294,6 +294,7 @@ class MeasurementMixin:
+ 
+         return {
+             "center": center_3d, "radius": radius, "normal": normal, "rms_residual": rms_residual,
++            "u_axis": u_axis, "v_axis": v_axis,
+         }
+ 
+     def _measure_compute(self):
+diff --git a/Code/gui/step_viewer_mixin.py b/Code/gui/step_viewer_mixin.py
+index 03683cb..d4cf57e 100644
+--- a/Code/gui/step_viewer_mixin.py
++++ b/Code/gui/step_viewer_mixin.py
+@@ -460,8 +460,10 @@ class StepViewerMixin:
+         The active selection filter (self._pick_filter) is applied first
+         - see _resolve_pick_for_filter - before this pick is offered to
+         any tool: a measurement slot (A or B) currently armed via the
+-        Measure tab, or a datum slot (Primary/Secondary/Tertiary) armed
+-        via the GD&T Position tab. See _measure_on_pick and _datum_on_pick.
++        Measure tab, a datum slot (Primary/Secondary/Tertiary) armed via
++        the GD&T Position tab, or a Stack Table row waiting to be linked
++        to a feature. See _measure_on_pick, _datum_on_pick, and
++        _stack_link_on_pick.
+         """
+         obj = self._resolve_pick_for_filter(obj)
+         if obj is _PICK_REJECTED:
+@@ -471,6 +473,8 @@ class StepViewerMixin:
+             return
+         if getattr(self, "_datum_on_pick", None) is not None and self._datum_on_pick(obj):
+             return
++        if getattr(self, "_stack_link_on_pick", None) is not None and self._stack_link_on_pick(obj):
++            return
+ 
+         info = self._step_entity_info.get(id(obj)) if obj is not None else None
+         if info is None:

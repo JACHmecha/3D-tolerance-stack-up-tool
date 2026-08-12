@@ -83,13 +83,14 @@ from gui.analysis_mixin import AnalysisMixin
 from gui.measurement_mixin import MeasurementMixin
 from gui.eclipse_mixin import EclipseMixin
 from gui.gdt_mixin import GdtMixin, PATTERN_COLUMNS
+from gui.stack_link_mixin import StackLinkMixin
 
 COLUMNS = ["Name", "Nominal", "Tol +", "Tol -", "+/-", "Cpk"]
 
 
 class TolstackWindow(
     QMainWindow, StepViewerMixin, DimensionBankMixin, AnalysisMixin,
-    MeasurementMixin, EclipseMixin, GdtMixin,
+    MeasurementMixin, EclipseMixin, GdtMixin, StackLinkMixin,
 ):
     def __init__(self):
         super().__init__()
@@ -115,6 +116,7 @@ class TolstackWindow(
         self._pick_markers = []
         self._measure_init_state()
         self._gdt_init_state()
+        self._stack_link_init_state()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -165,9 +167,11 @@ class TolstackWindow(
         stack_tab = QWidget()
         stack_layout = QVBoxLayout(stack_tab)
 
-        self.table = QTableWidget(0, len(COLUMNS))
-        self.table.setHorizontalHeaderLabels(COLUMNS)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table = QTableWidget(0, len(COLUMNS) + 1)  # +1 for the 3D-link Value column
+        self.table.setHorizontalHeaderLabels(COLUMNS + ["3D Value"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setMinimumSectionSize(50)
+        self.STACK_LINK_VALUE_COLUMN = len(COLUMNS)
         stack_layout.addWidget(self.table)
 
         legend = QHBoxLayout()
@@ -189,6 +193,55 @@ class TolstackWindow(
         row_btns.addWidget(add_btn)
         row_btns.addWidget(remove_btn)
         stack_layout.addLayout(row_btns)
+
+        link_intro = QLabel(
+            "Link a selected row to a STEP feature to explore its tolerance "
+            "range live in the 3D view - select a row, click Link, then click "
+            "the feature in the viewport."
+        )
+        link_intro.setWordWrap(True)
+        link_intro.setStyleSheet("color: #555555; font-size: 11px;")
+        stack_layout.addWidget(link_intro)
+
+        link_row = QHBoxLayout()
+        link_btn = QPushButton("Link selected row to feature")
+        link_btn.clicked.connect(self.link_selected_row_to_feature)
+        unlink_btn = QPushButton("Unlink")
+        unlink_btn.clicked.connect(self.unlink_selected_row)
+        link_row.addWidget(link_btn)
+        link_row.addWidget(unlink_btn)
+        stack_layout.addLayout(link_row)
+
+        snap_row1 = QHBoxLayout()
+        snap_worst_upper_btn = QPushButton("Snap: Worst \u2191")
+        snap_worst_upper_btn.clicked.connect(self.snap_to_worst_case_upper)
+        snap_worst_lower_btn = QPushButton("Snap: Worst \u2193")
+        snap_worst_lower_btn.clicked.connect(self.snap_to_worst_case_lower)
+        snap_row1.addWidget(snap_worst_upper_btn)
+        snap_row1.addWidget(snap_worst_lower_btn)
+        stack_layout.addLayout(snap_row1)
+
+        snap_row2 = QHBoxLayout()
+        snap_mc_max_btn = QPushButton("Snap: MC Max")
+        snap_mc_max_btn.clicked.connect(self.snap_to_monte_carlo_max)
+        snap_mc_min_btn = QPushButton("Snap: MC Min")
+        snap_mc_min_btn.clicked.connect(self.snap_to_monte_carlo_min)
+        snap_row2.addWidget(snap_mc_max_btn)
+        snap_row2.addWidget(snap_mc_min_btn)
+        stack_layout.addLayout(snap_row2)
+
+        snap_row3 = QHBoxLayout()
+        reset_links_btn = QPushButton("Reset to nominal")
+        reset_links_btn.clicked.connect(self.reset_stack_links_to_nominal)
+        snap_row3.addWidget(reset_links_btn)
+        snap_row3.addWidget(QLabel("MC samples:"))
+        self.stack_link_snap_iterations_input = QSpinBox()
+        self.stack_link_snap_iterations_input.setRange(100, 1000000)
+        self.stack_link_snap_iterations_input.setSingleStep(1000)
+        self.stack_link_snap_iterations_input.setValue(20000)
+        self.stack_link_snap_iterations_input.setMaximumWidth(90)
+        snap_row3.addWidget(self.stack_link_snap_iterations_input)
+        stack_layout.addLayout(snap_row3)
 
         sidebar.addTab(stack_tab, "Stack Table")
 

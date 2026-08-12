@@ -460,8 +460,10 @@ class StepViewerMixin:
         The active selection filter (self._pick_filter) is applied first
         - see _resolve_pick_for_filter - before this pick is offered to
         any tool: a measurement slot (A or B) currently armed via the
-        Measure tab, or a datum slot (Primary/Secondary/Tertiary) armed
-        via the GD&T Position tab. See _measure_on_pick and _datum_on_pick.
+        Measure tab, a datum slot (Primary/Secondary/Tertiary) armed via
+        the GD&T Position tab, or a Stack Table row waiting to be linked
+        to a feature. See _measure_on_pick, _datum_on_pick, and
+        _stack_link_on_pick.
         """
         obj = self._resolve_pick_for_filter(obj)
         if obj is _PICK_REJECTED:
@@ -470,6 +472,8 @@ class StepViewerMixin:
         if getattr(self, "_measure_on_pick", None) is not None and self._measure_on_pick(obj):
             return
         if getattr(self, "_datum_on_pick", None) is not None and self._datum_on_pick(obj):
+            return
+        if getattr(self, "_stack_link_on_pick", None) is not None and self._stack_link_on_pick(obj):
             return
 
         info = self._step_entity_info.get(id(obj)) if obj is not None else None
